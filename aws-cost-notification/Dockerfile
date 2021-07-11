@@ -1,9 +1,12 @@
 FROM public.ecr.aws/bitnami/golang:1.16 as build-image
 
-WORKDIR /go/src
-COPY go.mod go.sum main.go ./
+WORKDIR /go/src/aws-cost-explorer
+COPY go.mod go.sum ./
+RUN go mod download
 
-RUN go build -o ../bin
+COPY *.go ./
+
+RUN go build -o ../../bin
 
 FROM public.ecr.aws/lambda/go:1
 

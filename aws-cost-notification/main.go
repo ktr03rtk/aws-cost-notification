@@ -1,49 +1,48 @@
 package main
 
 import (
-	"errors"
+	"context"
+	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"net/http"
 
-	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
+	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
+	"github.com/pkg/errors"
 )
 
-var (
-	// DefaultHTTPGetAddress Default Address
-	DefaultHTTPGetAddress = "https://checkip.amazonaws.com"
-
-	// ErrNoIP No IP found in response
-	ErrNoIP = errors.New("No IP in HTTP response")
-
-	// ErrNon200Response non 200 status code in response
-	ErrNon200Response = errors.New("Non 200 Response found")
-)
-
-func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	resp, err := http.Get(DefaultHTTPGetAddress)
+func handler() error {
+	region := "ap-northeast-1"
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region))
 	if err != nil {
-		return events.APIGatewayProxyResponse{}, err
+		return errors.Wrap(err, "failed to initialize cost explorer client")
 	}
 
-	if resp.StatusCode != 200 {
-		return events.APIGatewayProxyResponse{}, ErrNon200Response
+	explorer := costexplorer.NewFromConfig(cfg)
+
+	getCostAndUsageInput := &costexplorer.GetCostAndUsageInput{
+		Granularity: types.GranularityMonthly,
+		Metrics:     []string{"UnblendedCost"},
+		TimePeriod:  &types.DateInterval{Start: aws.String("2021-07-01"), End: aws.String("2021-07-11")},
+		GroupBy:     []types.GroupDefinition{{Key: aws.String("SERVICE"), Type: "DIMENSION"}},
 	}
 
-	ip, err := ioutil.ReadAll(resp.Body)
+	output, _ := explorer.GetCostAndUsage(context.TODO(), getCostAndUsageInput)
 	if err != nil {
-		return events.APIGatewayProxyResponse{}, err
+		return errors.Wrap(err, "failed to get cost and usage")
 	}
 
-	if len(ip) == 0 {
-		return events.APIGatewayProxyResponse{}, ErrNoIP
+	bytes, err := json.Marshal(output)
+	if err != nil {
+		return errors.Wrap(err, "failed to json marshal")
 	}
 
-	return events.APIGatewayProxyResponse{
-		Body:       fmt.Sprintf("Hello, %v", string(ip)),
-		StatusCode: 200,
-	}, nil
+	fmt.Printf("--------------- %+v\n", string(bytes))
+
+	return nil
+
 }
 
 func main() {
