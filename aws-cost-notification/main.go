@@ -14,8 +14,7 @@ import (
 )
 
 func handler() error {
-	region := "ap-northeast-1"
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region))
+	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		return errors.Wrap(err, "failed to initialize cost explorer client")
 	}
