@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -48,12 +49,25 @@ func handler() error {
 		return errors.Wrap(err, "failed to get cost and usage")
 	}
 
-	bytes, err := json.Marshal(output)
+	total := new(big.Float)
+	for _, v := range output.ResultsByTime[0].Groups {
+		f, ok := new(big.Float).SetString(*v.Metrics["UnblendedCost"].Amount)
+		if !ok {
+			return errors.New("failed to parse big float")
+		}
+
+		total = new(big.Float).Add(total, f)
+
+	}
+
+	bytes, err := json.Marshal(output.ResultsByTime[0].Groups)
 	if err != nil {
 		return errors.Wrap(err, "failed to json marshal")
 	}
 
 	fmt.Printf("--------------- %+v\n", string(bytes))
+	fmt.Printf("--------------- %+v\n", output.ResultsByTime[0].TimePeriod)
+	fmt.Printf("--------------- %+v\n", total.String())
 
 	return nil
 
