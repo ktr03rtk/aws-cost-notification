@@ -1,0 +1,6 @@
+{
+  "Parameters": {
+    "SLACK_WEBHOOK_URL": "hoge",
+    "SLACK_CHANNEL": "huga"
+  }
+}

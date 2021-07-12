@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"net/http"
+	"net/url"
+	"os"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -15,8 +18,26 @@ import (
 	"github.com/pkg/errors"
 )
 
+type params struct {
+	Text      string `json:"text"`
+	Username  string `json:"username"`
+	IconEmoji string `json:"icon_emoji"`
+	IconURL   string `json:"icon_url"`
+	Channel   string `json:"channel"`
+}
+
 func handler() error {
 	const shortForm = "2006-01-02"
+
+	slackURL, ok := os.LookupEnv("SLACK_WEBHOOK_URL")
+	if !ok {
+		return errors.New("env SLACK_WEBHOOK_URL is not found")
+	}
+
+	slackChannel, ok := os.LookupEnv("SLACK_CHANNEL")
+	if !ok {
+		return errors.New("env SLACK_CHANNEL is not found")
+	}
 
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
@@ -26,8 +47,8 @@ func handler() error {
 	explorer := costexplorer.NewFromConfig(cfg)
 
 	var startDay, endDay string
-	t := time.Now()
 
+	t := time.Now()
 	// explore cost of previous month at the beginning of month
 	if t.Day() == 1 {
 		startDay = t.AddDate(0, -1, 0).Format(shortForm)
@@ -50,6 +71,7 @@ func handler() error {
 	}
 
 	total := new(big.Float)
+
 	for _, v := range output.ResultsByTime[0].Groups {
 		f, ok := new(big.Float).SetString(*v.Metrics["UnblendedCost"].Amount)
 		if !ok {
@@ -57,7 +79,6 @@ func handler() error {
 		}
 
 		total = new(big.Float).Add(total, f)
-
 	}
 
 	bytes, err := json.Marshal(output.ResultsByTime[0].Groups)
@@ -69,8 +90,28 @@ func handler() error {
 	fmt.Printf("--------------- %+v\n", output.ResultsByTime[0].TimePeriod)
 	fmt.Printf("--------------- %+v\n", total.String())
 
-	return nil
+	p := params{
+		Text:     string(bytes),
+		Username: "Cost Explorer",
+		Channel:  slackChannel,
+	}
 
+	params, err := json.Marshal(p)
+	if err != nil {
+		return errors.Wrap(err, "failed to json marshal")
+	}
+
+	resp, err := http.PostForm(
+		slackURL,
+		url.Values{"payload": {string(params)}},
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to send Slack message")
+	}
+
+	defer resp.Body.Close()
+
+	return nil
 }
 
 func main() {

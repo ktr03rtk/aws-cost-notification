@@ -23,7 +23,8 @@ Resources:
             Method: GET
       Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
         Variables:
-          PARAM1: VALUE
+          SLACK_WEBHOOK_URL: VALUE
+          SLACK_CHANNEL: VALUE
     Metadata:
       DockerTag: go1.x-v1
       DockerContext: ./aws-cost-notification
