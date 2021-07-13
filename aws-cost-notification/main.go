@@ -19,11 +19,22 @@ import (
 )
 
 type params struct {
-	Text      string `json:"text"`
-	Username  string `json:"username"`
-	IconEmoji string `json:"icon_emoji"`
-	IconURL   string `json:"icon_url"`
-	Channel   string `json:"channel"`
+	Blocks    []block `json:"blocks"`
+	Username  string  `json:"username"`
+	IconEmoji string  `json:"icon_emoji"`
+	IconURL   string  `json:"icon_url"`
+	Channel   string  `json:"channel"`
+}
+
+type block struct {
+	Type   string `json:"type"`
+	Fields []text `json:"fields,omitempty"`
+	Text   *text  `json:"text,omitempty"`
+}
+
+type text struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 func handler() error {
@@ -72,6 +83,13 @@ func handler() error {
 
 	total := new(big.Float)
 
+	var (
+		costDetailsBlocks []block
+		costDetailsFields []text
+	)
+
+	i := 0
+
 	for _, v := range output.ResultsByTime[0].Groups {
 		f, ok := new(big.Float).SetString(*v.Metrics["UnblendedCost"].Amount)
 		if !ok {
@@ -79,19 +97,57 @@ func handler() error {
 		}
 
 		total = new(big.Float).Add(total, f)
+
+		if f.Text('f', 2) == "0.00" {
+			continue
+		}
+
+		costDetailsFields = append(costDetailsFields, text{
+			Type: "mrkdwn",
+			Text: fmt.Sprintf("*%s:*\n%s $", *&v.Keys, f.Text('f', 2)),
+		})
+
+		if i%2 != 0 {
+			costDetailsBlocks = append(costDetailsBlocks, block{
+				Type:   "section",
+				Fields: costDetailsFields,
+			})
+
+			costDetailsFields = nil
+		}
+
+		i++
 	}
 
-	bytes, err := json.Marshal(output.ResultsByTime[0].Groups)
-	if err != nil {
-		return errors.Wrap(err, "failed to json marshal")
+	var blocks []block
+
+	header := block{
+		Type: "header",
+		Text: &text{
+			Type: "plain_text",
+			Text: fmt.Sprintf("Monthly AWS Cost (%s ~ %s)", *output.ResultsByTime[0].TimePeriod.Start, *output.ResultsByTime[0].TimePeriod.End),
+		},
 	}
 
-	fmt.Printf("--------------- %+v\n", string(bytes))
-	fmt.Printf("--------------- %+v\n", output.ResultsByTime[0].TimePeriod)
-	fmt.Printf("--------------- %+v\n", total.String())
+	totalCost := block{
+		Type: "section",
+		Fields: []text{
+			{
+				Type: "mrkdwn",
+				Text: fmt.Sprintf("*Total Cost:*\n%s $", total.Text('f', 2)),
+			},
+		},
+	}
+
+	divider := block{
+		Type: "divider",
+	}
+
+	blocks = append(blocks, header, totalCost, divider)
+	blocks = append(blocks, costDetailsBlocks...)
 
 	p := params{
-		Text:     string(bytes),
+		Blocks:   blocks,
 		Username: "Cost Explorer",
 		Channel:  slackChannel,
 	}
