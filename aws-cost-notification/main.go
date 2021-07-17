@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -15,6 +16,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 	"github.com/pkg/errors"
+)
+
+var (
+	slackURL     string
+	slackChannel string
 )
 
 type params struct {
@@ -36,23 +42,26 @@ type text struct {
 	Text string `json:"text"`
 }
 
-func handler() error {
-	const shortForm = "2006-01-02"
-
-	slackURL, ok := os.LookupEnv("SLACK_WEBHOOK_URL")
-	if !ok {
-		return errors.New("env SLACK_WEBHOOK_URL is not found")
-	}
-
-	slackChannel, ok := os.LookupEnv("SLACK_CHANNEL")
+func getEnvVal() error {
+	u, ok := os.LookupEnv("SLACK_WEBHOOK_URL")
 	if !ok {
 		return errors.New("env SLACK_CHANNEL is not found")
 	}
 
-	client, err := newClient()
-	if err != nil {
-		return err
+	slackURL = u
+
+	c, ok := os.LookupEnv("SLACK_CHANNEL")
+	if !ok {
+		return errors.New("env SLACK_CHANNEL is not found")
 	}
+
+	slackChannel = c
+
+	return nil
+}
+
+func (c *client) handler() error {
+	const shortForm = "2006-01-02"
 
 	var startDay, endDay string
 
@@ -73,7 +82,7 @@ func handler() error {
 		GroupBy:     []types.GroupDefinition{{Key: aws.String("SERVICE"), Type: "DIMENSION"}},
 	}
 
-	output, err := client.GetCostAndUsage(context.TODO(), getCostAndUsageInput)
+	output, err := c.GetCostAndUsage(context.TODO(), getCostAndUsageInput)
 	if err != nil {
 		return errors.Wrap(err, "failed to get cost and usage")
 	}
@@ -168,5 +177,14 @@ func handler() error {
 }
 
 func main() {
-	lambda.Start(handler)
+	if err := getEnvVal(); err != nil {
+		log.Fatal(err)
+	}
+
+	c, err := newClient()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	lambda.Start(c.handler)
 }
