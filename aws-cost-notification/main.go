@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -15,6 +16,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 	"github.com/pkg/errors"
+)
+
+var (
+	slackURL     string
+	slackChannel string
 )
 
 type params struct {
@@ -36,84 +42,113 @@ type text struct {
 	Text string `json:"text"`
 }
 
-func handler() error {
-	const shortForm = "2006-01-02"
-
-	slackURL, ok := os.LookupEnv("SLACK_WEBHOOK_URL")
-	if !ok {
-		return errors.New("env SLACK_WEBHOOK_URL is not found")
-	}
-
-	slackChannel, ok := os.LookupEnv("SLACK_CHANNEL")
+func getEnvVal() error {
+	u, ok := os.LookupEnv("SLACK_WEBHOOK_URL")
 	if !ok {
 		return errors.New("env SLACK_CHANNEL is not found")
 	}
 
-	client, err := newClient()
-	if err != nil {
-		return err
+	slackURL = u
+
+	c, ok := os.LookupEnv("SLACK_CHANNEL")
+	if !ok {
+		return errors.New("env SLACK_CHANNEL is not found")
 	}
 
-	var startDay, endDay string
+	slackChannel = c
+
+	return nil
+}
+
+func getDateInterval() *types.DateInterval {
+	const shortForm = "2006-01-02"
 
 	t := time.Now()
+
 	// explore cost of previous month at the beginning of month
 	if t.Day() == 1 {
-		startDay = t.AddDate(0, -1, 0).Format(shortForm)
-		endDay = t.AddDate(0, 0, -1).Format(shortForm)
-	} else {
-		startDay = time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC).Format(shortForm)
-		endDay = t.Format(shortForm)
+		return &types.DateInterval{
+			Start: aws.String(t.AddDate(0, -1, 0).Format(shortForm)),
+			End:   aws.String(t.AddDate(0, 0, -1).Format(shortForm)),
+		}
 	}
 
+	return &types.DateInterval{
+		Start: aws.String(time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC).Format(shortForm)),
+		End:   aws.String(t.Format(shortForm)),
+	}
+}
+
+func (c *client) getCost(dateInterval *types.DateInterval) (*costexplorer.GetCostAndUsageOutput, error) {
 	getCostAndUsageInput := &costexplorer.GetCostAndUsageInput{
 		Granularity: types.GranularityMonthly,
 		Metrics:     []string{"UnblendedCost"},
-		TimePeriod:  &types.DateInterval{Start: aws.String(startDay), End: aws.String(endDay)},
+		TimePeriod:  dateInterval,
 		GroupBy:     []types.GroupDefinition{{Key: aws.String("SERVICE"), Type: "DIMENSION"}},
 	}
 
-	output, err := client.GetCostAndUsage(context.TODO(), getCostAndUsageInput)
+	result, err := c.GetCostAndUsage(context.TODO(), getCostAndUsageInput)
 	if err != nil {
-		return errors.Wrap(err, "failed to get cost and usage")
+		return nil, errors.Wrap(err, "failed to get cost and usage")
 	}
 
-	total := new(big.Float)
+	return result, nil
+}
 
-	var (
-		costDetailsBlocks []block
-		costDetailsFields []text
-	)
+func getIndividualCost(v types.Group) (*big.Float, error) {
+	c, ok := new(big.Float).SetString(*v.Metrics["UnblendedCost"].Amount)
+	if !ok {
+		return nil, errors.New("failed to parse big float")
+	}
 
-	i := 0
+	return c, nil
+}
 
-	for _, v := range output.ResultsByTime[0].Groups {
-		f, ok := new(big.Float).SetString(*v.Metrics["UnblendedCost"].Amount)
-		if !ok {
-			return errors.New("failed to parse big float")
+func buildDetailsBlockClosure() func(keys []string, individualCost *big.Float, detailsBlocks *[]block, detailsFields *[]text) {
+	var i int
+
+	return func(keys []string, individualCost *big.Float, detailsBlocks *[]block, detailsFields *[]text) {
+		if individualCost.Text('f', 2) == "0.00" {
+			return
 		}
 
-		total = new(big.Float).Add(total, f)
-
-		if f.Text('f', 2) == "0.00" {
-			continue
-		}
-
-		costDetailsFields = append(costDetailsFields, text{
+		*detailsFields = append(*detailsFields, text{
 			Type: "mrkdwn",
-			Text: fmt.Sprintf("*%s:*\n%s $", *&v.Keys, f.Text('f', 2)),
+			Text: fmt.Sprintf("*%s:*\n%s $", keys, individualCost.Text('f', 2)),
 		})
 
 		if i%2 != 0 {
-			costDetailsBlocks = append(costDetailsBlocks, block{
+			*detailsBlocks = append(*detailsBlocks, block{
 				Type:   "section",
-				Fields: costDetailsFields,
+				Fields: *detailsFields,
 			})
 
-			costDetailsFields = nil
+			*detailsFields = nil
 		}
 
 		i++
+	}
+}
+
+func buildResultStatement(cost *costexplorer.GetCostAndUsageOutput) (string, error) {
+	total := new(big.Float)
+
+	var (
+		detailsFields []text
+		detailsBlocks []block
+	)
+
+	buildDetailsBlock := buildDetailsBlockClosure()
+
+	for _, v := range cost.ResultsByTime[0].Groups {
+		individualCost, err := getIndividualCost(v)
+		if err != nil {
+			return "", err
+		}
+
+		total = new(big.Float).Add(total, individualCost)
+
+		buildDetailsBlock(v.Keys, individualCost, &detailsBlocks, &detailsFields)
 	}
 
 	var blocks []block
@@ -122,7 +157,7 @@ func handler() error {
 		Type: "header",
 		Text: &text{
 			Type: "plain_text",
-			Text: fmt.Sprintf("Monthly AWS Cost (%s ~ %s)", *output.ResultsByTime[0].TimePeriod.Start, *output.ResultsByTime[0].TimePeriod.End),
+			Text: fmt.Sprintf("Monthly AWS Cost (%s ~ %s)", *cost.ResultsByTime[0].TimePeriod.Start, *cost.ResultsByTime[0].TimePeriod.End),
 		},
 	}
 
@@ -141,7 +176,7 @@ func handler() error {
 	}
 
 	blocks = append(blocks, header, totalCost, divider)
-	blocks = append(blocks, costDetailsBlocks...)
+	blocks = append(blocks, detailsBlocks...)
 
 	p := params{
 		Blocks:   blocks,
@@ -151,12 +186,29 @@ func handler() error {
 
 	params, err := json.Marshal(p)
 	if err != nil {
-		return errors.Wrap(err, "failed to json marshal")
+		return "", errors.Wrap(err, "failed to json marshal")
+	}
+
+	pa := string(params)
+	return pa, nil
+}
+
+func (c *client) handler() error {
+	dateInterval := getDateInterval()
+
+	cost, err := c.getCost(dateInterval)
+	if err != nil {
+		return err
+	}
+
+	pa, err := buildResultStatement(cost)
+	if err != nil {
+		return err
 	}
 
 	resp, err := http.PostForm(
 		slackURL,
-		url.Values{"payload": {string(params)}},
+		url.Values{"payload": {pa}},
 	)
 	if err != nil {
 		return errors.Wrap(err, "failed to send Slack message")
@@ -168,5 +220,14 @@ func handler() error {
 }
 
 func main() {
-	lambda.Start(handler)
+	if err := getEnvVal(); err != nil {
+		log.Fatal(err)
+	}
+
+	c, err := newClient()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	lambda.Start(c.handler)
 }
