@@ -12,7 +12,6 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 	"github.com/pkg/errors"
@@ -50,12 +49,10 @@ func handler() error {
 		return errors.New("env SLACK_CHANNEL is not found")
 	}
 
-	cfg, err := config.LoadDefaultConfig(context.TODO())
+	client, err := newClient()
 	if err != nil {
-		return errors.Wrap(err, "failed to initialize cost explorer client")
+		return err
 	}
-
-	explorer := costexplorer.NewFromConfig(cfg)
 
 	var startDay, endDay string
 
@@ -76,7 +73,7 @@ func handler() error {
 		GroupBy:     []types.GroupDefinition{{Key: aws.String("SERVICE"), Type: "DIMENSION"}},
 	}
 
-	output, err := explorer.GetCostAndUsage(context.TODO(), getCostAndUsageInput)
+	output, err := client.GetCostAndUsage(context.TODO(), getCostAndUsageInput)
 	if err != nil {
 		return errors.Wrap(err, "failed to get cost and usage")
 	}
