@@ -15,12 +15,17 @@ Resources:
     Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
     Properties:
       PackageType: Image
+      ImageConfig:
+        Command: ["aws-cost-notification"]
+      Role: !GetAtt AwsCostNotificationFunctionIamRole.Arn
       Events:
-        CatchAll:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+        CWSchedule:
+          Type: Schedule
           Properties:
-            Path: /
-            Method: GET
+            Schedule: "cron(0 0 * * ? *)"
+            Name: CostNotificationSchedule
+            Description: cost notification schedule
+            Enabled: true
       Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
         Variables:
           SLACK_WEBHOOK_URL: VALUE
@@ -29,17 +34,38 @@ Resources:
       DockerTag: go1.x-v1
       DockerContext: ./aws-cost-notification
       Dockerfile: Dockerfile
+  AwsCostNotificationFunctionIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service: lambda.amazonaws.com
+      Policies:
+        - PolicyName: "cost-notification-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "ce:GetCostAndUsage"
+                  - "ce:GetDimensionValues"
+                  - "ce:GetReservationCoverage"
+                  - "ce:GetReservationPurchaseRecommendation"
+                  - "ce:GetReservationUtilization"
+                  - "ce:GetTags"
+                Resource: "*"
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "*"
 
 Outputs:
-  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
-  # Find out more about other implicit resources you can reference within SAM
-  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
-  AwsCostNotificationAPI:
-    Description: "API Gateway endpoint URL for Prod environment for First Function"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
   AwsCostNotificationFunction:
     Description: "First Lambda Function ARN"
     Value: !GetAtt AwsCostNotificationFunction.Arn
-  AwsCostNotificationFunctionIamRole:
-    Description: "Implicit IAM Role created for AWS cost notification function"
-    Value: !GetAtt AwsCostNotificationFunctionRole.Arn
