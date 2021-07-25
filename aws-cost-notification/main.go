@@ -23,6 +23,8 @@ var (
 	slackChannel string
 )
 
+const costDigit = 2
+
 type params struct {
 	Blocks    []block `json:"blocks"`
 	Username  string  `json:"username"`
@@ -108,13 +110,13 @@ func buildDetailsBlockClosure() func(keys []string, individualCost *big.Float, d
 	var i int
 
 	return func(keys []string, individualCost *big.Float, detailsBlocks *[]block, detailsFields *[]text) {
-		if individualCost.Text('f', 2) == "0.00" {
+		if individualCost.Text('f', costDigit) == "0.00" {
 			return
 		}
 
 		*detailsFields = append(*detailsFields, text{
 			Type: "mrkdwn",
-			Text: fmt.Sprintf("*%s:*\n%s $", keys, individualCost.Text('f', 2)),
+			Text: fmt.Sprintf("*%s:*\n%s $", keys, individualCost.Text('f', costDigit)),
 		})
 
 		if i%2 != 0 {
@@ -130,27 +132,7 @@ func buildDetailsBlockClosure() func(keys []string, individualCost *big.Float, d
 	}
 }
 
-func buildResultStatement(cost *costexplorer.GetCostAndUsageOutput) (string, error) {
-	total := new(big.Float)
-
-	var (
-		detailsFields []text
-		detailsBlocks []block
-	)
-
-	buildDetailsBlock := buildDetailsBlockClosure()
-
-	for _, v := range cost.ResultsByTime[0].Groups {
-		individualCost, err := getIndividualCost(v)
-		if err != nil {
-			return "", err
-		}
-
-		total = new(big.Float).Add(total, individualCost)
-
-		buildDetailsBlock(v.Keys, individualCost, &detailsBlocks, &detailsFields)
-	}
-
+func buildMainBlocks(cost *costexplorer.GetCostAndUsageOutput, total *big.Float, detailsBlocks []block) []block {
 	var blocks []block
 
 	header := block{
@@ -166,7 +148,7 @@ func buildResultStatement(cost *costexplorer.GetCostAndUsageOutput) (string, err
 		Fields: []text{
 			{
 				Type: "mrkdwn",
-				Text: fmt.Sprintf("*Total Cost:*\n%s $", total.Text('f', 2)),
+				Text: fmt.Sprintf("*Total Cost:*\n%s $", total.Text('f', costDigit)),
 			},
 		},
 	}
@@ -177,6 +159,32 @@ func buildResultStatement(cost *costexplorer.GetCostAndUsageOutput) (string, err
 
 	blocks = append(blocks, header, totalCost, divider)
 	blocks = append(blocks, detailsBlocks...)
+
+	return blocks
+}
+
+func buildResultStatement(cost *costexplorer.GetCostAndUsageOutput) (string, error) {
+	var (
+		detailsFields []text
+		detailsBlocks []block
+	)
+
+	total := new(big.Float)
+
+	buildDetailsBlock := buildDetailsBlockClosure()
+
+	for _, v := range cost.ResultsByTime[0].Groups {
+		individualCost, err := getIndividualCost(v)
+		if err != nil {
+			return "", err
+		}
+
+		total = new(big.Float).Add(total, individualCost)
+
+		buildDetailsBlock(v.Keys, individualCost, &detailsBlocks, &detailsFields)
+	}
+
+	blocks := buildMainBlocks(cost, total, detailsBlocks)
 
 	p := params{
 		Blocks:   blocks,
@@ -189,8 +197,7 @@ func buildResultStatement(cost *costexplorer.GetCostAndUsageOutput) (string, err
 		return "", errors.Wrap(err, "failed to json marshal")
 	}
 
-	pa := string(params)
-	return pa, nil
+	return string(params), nil
 }
 
 func (c *client) handler() error {
@@ -201,14 +208,14 @@ func (c *client) handler() error {
 		return err
 	}
 
-	pa, err := buildResultStatement(cost)
+	result, err := buildResultStatement(cost)
 	if err != nil {
 		return err
 	}
 
 	resp, err := http.PostForm(
 		slackURL,
-		url.Values{"payload": {pa}},
+		url.Values{"payload": {result}},
 	)
 	if err != nil {
 		return errors.Wrap(err, "failed to send Slack message")
