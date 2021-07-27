@@ -30,6 +30,7 @@ Resources:
         Variables:
           SLACK_WEBHOOK_URL: VALUE
           SLACK_CHANNEL: VALUE
+      Tracing: Active
     Metadata:
       DockerTag: go1.x-v1
       DockerContext: ./aws-cost-notification
@@ -63,6 +64,14 @@ Resources:
                   - "logs:CreateLogGroup"
                   - "logs:CreateLogStream"
                   - "logs:PutLogEvents"
+                Resource: "*"
+              - Effect: "Allow"
+                Action:
+                  - "xray:PutTraceSegments"
+                  - "xray:PutTelemetryRecords"
+                  - "xray:GetSamplingRules"
+                  - "xray:GetSamplingTargets"
+                  - "xray:GetSamplingStatisticSummaries"
                 Resource: "*"
 
 Outputs:
